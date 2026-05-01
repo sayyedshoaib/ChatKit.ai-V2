@@ -23,3 +23,12 @@ class Tenant(BaseModel):
     email: EmailStr               # Admin email for login
     hashed_password: str          # Securely stored password
     api_key: Optional[str] = None # Issued token for widget/API usage
+
+class TenantSignup(BaseModel):
+    name: str
+    email: str
+    password: str
+
+class TenantLogin(BaseModel):
+    email: str
+    password: str

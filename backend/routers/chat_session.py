@@ -4,16 +4,22 @@ from fastapi import APIRouter, HTTPException
 from uuid import uuid4
 from core.db import db
 from models.chat_session import StartChatRequest ,ChatMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
 load_dotenv()
 
-CHAT_SESSION_COL = os.getenv("CHAT_SESSION_COL")
-CHATBOT_CONFIG_COL = os.getenv("CHATBOT_CONFIG_COL")
+CHAT_SESSION_COLLECTION = os.getenv("CHAT_SESSION_COLLECTION")
+CHATBOT_CONFIG_COLLECTION = os.getenv("CHATBOT_CONFIG_COLLECTION")
+os.environ["GEMINI_API_KEY"] = os.getenv("GEMINI_API_KEY")
+os.environ["GOOGLE_API_KEY"] = os.getenv("GEMINI_API_KEY")
+
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
 
 router = APIRouter()
 
-chat_sessions_collection = db[CHAT_SESSION_COL]
-chatbot_collection = db[CHATBOT_CONFIG_COL]
+chat_sessions_collection = db[CHAT_SESSION_COLLECTION]
+chatbot_collection = db[CHATBOT_CONFIG_COLLECTION]
+
 
 
 @router.post("/start", response_model=dict)
@@ -37,28 +43,6 @@ async def start_chat(req: StartChatRequest):
         "faqs": config.get("faqs", [])
     }
 
-@router.post("/{chat_id}/message", response_model=dict)
-async def send_message(chat_id: str, message: ChatMessage):
-    session = await chat_sessions_collection.find_one({"chat_id": chat_id})
-    if not session:
-        raise HTTPException(status_code=404, detail="Chat session not found")
-
-    # Append user message
-    await chat_sessions_collection.update_one(
-        {"chat_id": chat_id},
-        {"$push": {"messages": message.dict()}}
-    )
-
-    # TODO: FAQ check, RAG agent, NL→SQL agent
-    reply = {"sender": "bot", "text": "This is a placeholder response."}
-
-    await chat_sessions_collection.update_one(
-        {"chat_id": chat_id},
-        {"$push": {"messages": reply}}
-    )
-
-    return reply
-
 @router.get("/{chat_id}", response_model=dict)
 async def get_chat(chat_id: str):
     session = await chat_sessions_collection.find_one({"chat_id": chat_id})
@@ -66,6 +50,81 @@ async def get_chat(chat_id: str):
         session.pop("_id", None)
         return session
     raise HTTPException(status_code=404, detail="Chat session not found")
+
+
+# @router.post("/{chat_id}/message", response_model=dict)
+# async def send_message(chat_id: str, message: ChatMessage):
+#     session = await chat_sessions_collection.find_one({"chat_id": chat_id})
+#     if not session:
+#         raise HTTPException(status_code=404, detail="Chat session not found")
+
+#     # Append user message
+#     await chat_sessions_collection.update_one(
+#         {"chat_id": chat_id},
+#         {"$push": {"messages": message.dict()}}
+#     )
+
+#     # TODO: FAQ check, RAG agent, NL→SQL agent
+#     reply = {"sender": "bot", "text": "This is a placeholder response."}
+
+#     await chat_sessions_collection.update_one(
+#         {"chat_id": chat_id},
+#         {"$push": {"messages": reply}}
+#     )
+
+#     return reply
+
+
+@router.post("/{chat_id}/message", response_model=dict)
+async def send_message(chat_id: str, message: ChatMessage):
+    session = await chat_sessions_collection.find_one({"chat_id": chat_id})
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    # Append user message
+    # await chat_sessions_collection.update_one(
+    #     {"chat_id": chat_id},
+    #     {"$push": {"messages": message.dict()}}
+    # )
+    # --- Step 3: Simple LLM response ---+
+    try:
+        response = llm.invoke(message.text)
+        bot_text = response.content
+        print(bot_text)
+    except Exception as e:
+        bot_text = f"Sorry, I couldn't process that. Error: {str(e)}"
+
+    reply = {"sender": "bot", "text": bot_text}
+
+    # Save bot reply to session
+    # await chat_sessions_collection.update_one(
+    #     {"chat_id": chat_id},
+    #     {"$push": {"messages": reply}}
+    # )
+
+    return reply
+
+
+
+
+
+
+# step 1 : user click the chatbot button , start_chat api hit 
+# step 2 : user type a msg ans press send button send_message is hit
+# step 3 : in send_message we will use langgraph workflow agents ,we will analyze user question 
+# in langchain workflow , we build agents as list 
+# this list will be empty 
+# then we wll append faq agent(its a compusory field in chatbot config)
+# then we iterate over chatbot_config.agents and add agents repectively to agent 
+# then when we have the list of agents , then we build the langchain workflow based on the list,
+# once the workflow(agentic architecture) then we will provide the user query/message to the graph and then wait for the reponse if the langchain gav the proper reponse we will return the reponse , if it give something like cant find answer or any  keyword then there comes another condition
+# if the escalation decsription logic(email , phone , or any api where the hit the ticket request) givenm by the tenant  we will use the esacalation logic
+# if not then we return the repone , cant find answer or something like that.
+# as of now lets not include esalation code (it could be future scope)
+# now we have step 1 and step 2 code , lets implement step 3 ,
+# update send message api 
+# lets start with just a simple chat reponse from llm , no langchain no agents
+
 
 
 # Next Step: Integrate Agents into Chat Sessions

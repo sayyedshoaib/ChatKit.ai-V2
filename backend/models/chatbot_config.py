@@ -17,10 +17,25 @@ class RAGSource(BaseModel):
     path_or_url: str               # file path or URL
     metadata: Optional[Dict] = {}  # extra info (title, tags, etc.)
 
+# class ChatbotConfig(BaseModel):
+#     tenant_id: str
+#     welcome_message: Optional[str] = "Hello! How can I help you today?"
+#     faqs: List[Dict] = []
+#     workflows: Optional[Dict] = []
+#     rag_sources: List[str] = []
+#     db_connection: Optional[str] = ""  # if tenant wants NL→SQL agent
+
+from typing import List, Dict, Optional
+from pydantic import BaseModel
+
 class ChatbotConfig(BaseModel):
     tenant_id: str
     welcome_message: Optional[str] = "Hello! How can I help you today?"
     faqs: List[Dict] = []
-    workflows: Optional[Dict] = []
+    workflows: Optional[Dict] = None        # ✅ dict or None
     rag_sources: List[str] = []
-    db_connection: Optional[str] = ""  # if tenant wants NL→SQL agent
+    db_connection: Optional[str] = ""     # ✅ string or None
+    description: str                        # mandatory
+    instruction: str                        # mandatory
+    agents: List[Dict] = []                 # initially empty list
+

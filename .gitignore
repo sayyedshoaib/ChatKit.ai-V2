@@ -1,1 +1,6 @@
 backend/.env
+backend/requirements.txt
+backend/__pycache__/*
+backend/core/__pycache__/*
+backend/models/__pycache__/*
+backend/routers/__pycache__/*

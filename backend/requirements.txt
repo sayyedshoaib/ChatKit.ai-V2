@@ -7,3 +7,10 @@ pydantic[email]
 bcrypt==4.0.1 
 passlib==1.7.4
 python-multipart
+langchain
+langchain_google_genai
+pypdf2
+python-docx
+langchain_community
+langchain-core
+google.generativeai

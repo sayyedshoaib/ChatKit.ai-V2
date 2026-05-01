@@ -9,15 +9,15 @@ load_dotenv()
 
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = os.getenv("DB_NAME")
-TENANTS_COL = os.getenv("TENANTS_COL")
-CHATBOT_CONFIG_COL = os.getenv("CHATBOT_CONFIG_COL")
+TENANTS_COLLECTION = os.getenv("TENANTS_COLLECTION")
+CHATBOT_CONFIG_COLLECTION = os.getenv("CHATBOT_CONFIG_COLLECTION")
 
 client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URI)
 db = client[DB_NAME]
 
 # Collections
-tenants_collection = db[TENANTS_COL]
-chatbot_configs_collection = db[CHATBOT_CONFIG_COL]
+tenants_collection = db[TENANTS_COLLECTION]
+chatbot_configs_collection = db[CHATBOT_CONFIG_COLLECTION]
 
 # Password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")

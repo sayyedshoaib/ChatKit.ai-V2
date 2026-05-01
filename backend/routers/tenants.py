@@ -2,21 +2,12 @@
 from fastapi import APIRouter, HTTPException, Depends
 from uuid import uuid4
 from core.db import tenants_collection, tenant_helper, set_password, verify_password
-from models.tenant import Tenant
+from models.tenant import Tenant , TenantLogin , TenantSignup
 from pydantic import BaseModel
 import secrets
 
 router = APIRouter()
 
-# Request models
-class TenantSignup(BaseModel):
-    name: str
-    email: str
-    password: str
-
-class TenantLogin(BaseModel):
-    email: str
-    password: str
 
 @router.post("/signup", response_model=dict)
 async def signup_tenant(payload: TenantSignup):
