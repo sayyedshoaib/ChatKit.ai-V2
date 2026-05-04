@@ -101,6 +101,42 @@ async def add_agent_to_config(agent_input: AgentInput):
         updated.pop("_id")
     return updated
 
+
+class FAQInput(BaseModel):
+    tenant_id: str
+    faq: Dict[str, str]   # single Q&A pair
+
+@router.post("/add_faq_to_config", response_model=dict)
+async def add_faq_to_config(faq_input: FAQInput):
+    """
+    Add a FAQ (question-answer pair) to the chatbot configuration for a tenant.
+    """
+    tenant_id = faq_input.tenant_id
+    faq = faq_input.faq
+
+    # Find tenant config
+    existing = await chatbot_collection.find_one({"tenant_id": tenant_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Chatbot config not found")
+
+    # Append new FAQ
+    faqs = list(existing.get("faqs", []))
+    faqs.append(faq)
+
+    # Update config
+    await chatbot_collection.update_one(
+        {"tenant_id": tenant_id},
+        {"$set": {"faqs": faqs}}
+    )
+
+    # Fetch updated config
+    updated = await chatbot_collection.find_one({"tenant_id": tenant_id})
+    if updated and "_id" in updated:
+        updated.pop("_id")
+    return updated
+
+
+
 BASE_DIR = "knowledge_base"  # root folder for tenant files
 
 @router.post("/{tenant_id}/upload_rag_source")
@@ -217,7 +253,7 @@ async def query_embeddings(tenant_id: str, query: str, k: int = 5, num_candidate
 
     # Run aggregation with Motor (async)
     results = await embeddings_collection.aggregate(pipeline).to_list(length=k)
-    # results = results[].replace('\n','')
+    results = results[0]["text"].replace('\n','') if results else ""
 
     if not results:
         raise HTTPException(status_code=404, detail="No matching chunks found")

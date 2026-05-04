@@ -52,29 +52,6 @@ async def get_chat(chat_id: str):
     raise HTTPException(status_code=404, detail="Chat session not found")
 
 
-# @router.post("/{chat_id}/message", response_model=dict)
-# async def send_message(chat_id: str, message: ChatMessage):
-#     session = await chat_sessions_collection.find_one({"chat_id": chat_id})
-#     if not session:
-#         raise HTTPException(status_code=404, detail="Chat session not found")
-
-#     # Append user message
-#     await chat_sessions_collection.update_one(
-#         {"chat_id": chat_id},
-#         {"$push": {"messages": message.dict()}}
-#     )
-
-#     # TODO: FAQ check, RAG agent, NL→SQL agent
-#     reply = {"sender": "bot", "text": "This is a placeholder response."}
-
-#     await chat_sessions_collection.update_one(
-#         {"chat_id": chat_id},
-#         {"$push": {"messages": reply}}
-#     )
-
-#     return reply
-
-
 @router.post("/{chat_id}/message", response_model=dict)
 async def send_message(chat_id: str, message: ChatMessage):
     session = await chat_sessions_collection.find_one({"chat_id": chat_id})
