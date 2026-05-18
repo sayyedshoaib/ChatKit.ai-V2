@@ -1,11 +1,15 @@
 # app/api/v1/chat_sessions.py
 import os
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import jwt
 from uuid import uuid4
 from core.db import db
-from models.chat_session import StartChatRequest ,ChatMessage
+from models.chat_session import StartChatRequest, ChatMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from .utils.agents import run_orchestrator
 from dotenv import load_dotenv
+
 load_dotenv()
 
 CHAT_SESSION_COLLECTION = os.getenv("CHAT_SESSION_COLLECTION")
@@ -20,10 +24,30 @@ router = APIRouter()
 chat_sessions_collection = db[CHAT_SESSION_COLLECTION]
 chatbot_collection = db[CHATBOT_CONFIG_COLLECTION]
 
+# --- Widget token verification (end users only) ---
+security = HTTPBearer()
+WIDGET_SECRET = os.getenv("WIDGET_SECRET", "widgetsecret")  # backend secret for widget tokens
+WIDGET_ALGO = "HS256"
 
+def get_end_user(token: HTTPAuthorizationCredentials = Depends(security)):
+    try:
+        payload = jwt.decode(token.credentials, WIDGET_SECRET, algorithms=[WIDGET_ALGO])
+        if payload.get("role") != "end_user":
+            raise HTTPException(status_code=403, detail="Only end users can access chat sessions")
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Widget token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid widget token")
+
+# --- Routes ---
 
 @router.post("/start", response_model=dict)
-async def start_chat(req: StartChatRequest):
+async def start_chat(req: StartChatRequest, user=Depends(get_end_user)):
+    # Ensure token tenant matches request tenant
+    if user.get("tenant_id") != req.tenant_id:
+        raise HTTPException(status_code=403, detail="Token tenant mismatch")
+
     config = await chatbot_collection.find_one({"tenant_id": req.tenant_id})
     if not config:
         raise HTTPException(status_code=404, detail="Chatbot config not found")
@@ -44,40 +68,49 @@ async def start_chat(req: StartChatRequest):
     }
 
 @router.get("/{chat_id}", response_model=dict)
-async def get_chat(chat_id: str):
-    session = await chat_sessions_collection.find_one({"chat_id": chat_id})
-    if session:
-        session.pop("_id", None)
-        return session
-    raise HTTPException(status_code=404, detail="Chat session not found")
-
-
-@router.post("/{chat_id}/message", response_model=dict)
-async def send_message(chat_id: str, message: ChatMessage):
+async def get_chat(chat_id: str, user=Depends(get_end_user)):
     session = await chat_sessions_collection.find_one({"chat_id": chat_id})
     if not session:
         raise HTTPException(status_code=404, detail="Chat session not found")
 
-    # Append user message
-    # await chat_sessions_collection.update_one(
-    #     {"chat_id": chat_id},
-    #     {"$push": {"messages": message.dict()}}
-    # )
-    # --- Step 3: Simple LLM response ---+
+    if user.get("tenant_id") != session["tenant_id"]:
+        raise HTTPException(status_code=403, detail="Token tenant mismatch")
+
+    session.pop("_id", None)
+    return session
+
+@router.post("/{chat_id}/message", response_model=dict)
+async def send_message(chat_id: str, message: ChatMessage, user=Depends(get_end_user)):
+    session = await chat_sessions_collection.find_one({"chat_id": chat_id})
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    if user.get("tenant_id") != session["tenant_id"]:
+        raise HTTPException(status_code=403, detail="Token tenant mismatch")
+
     try:
-        response = llm.invoke(message.text)
-        bot_text = response.content
-        print(bot_text)
+        # Run orchestrator workflow for tenant
+        # bot_text = await run_orchestrator(
+        #     tenant_id=session["tenant_id"],
+        #     user_query=message.text
+        # )
+        # bot_text = bot_text["text"]
+        bot_text = "dummy rersponse for texting"
+        print("LLM Response:", bot_text)
     except Exception as e:
         bot_text = f"Sorry, I couldn't process that. Error: {str(e)}"
 
     reply = {"sender": "bot", "text": bot_text}
 
-    # Save bot reply to session
-    # await chat_sessions_collection.update_one(
-    #     {"chat_id": chat_id},
-    #     {"$push": {"messages": reply}}
-    # )
+    # Append user + bot messages to session
+    await chat_sessions_collection.update_one(
+        {"chat_id": chat_id},
+        {"$push": {"messages": message.dict()}}
+    )
+    await chat_sessions_collection.update_one(
+        {"chat_id": chat_id},
+        {"$push": {"messages": reply}}
+    )
 
     return reply
 

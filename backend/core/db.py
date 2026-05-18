@@ -3,7 +3,6 @@ from dotenv import load_dotenv
 import os
 import motor.motor_asyncio
 from passlib.context import CryptContext
-import hashlib
 
 load_dotenv()
 
@@ -19,8 +18,8 @@ db = client[DB_NAME]
 tenants_collection = db[TENANTS_COLLECTION]
 chatbot_configs_collection = db[CHATBOT_CONFIG_COLLECTION]
 
-# Password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Password hashing context (Argon2 instead of bcrypt)
+pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 # Tenant helper
 def tenant_helper(tenant) -> dict:
@@ -43,14 +42,9 @@ def chatbot_config_helper(config) -> dict:
         "db_connection": config.get("db_connection", {})
     }
 
-# Password utilities
+# Password utilities (Argon2)
 def set_password(password: str) -> str:
-    # bcrypt only supports up to 72 bytes
-    if len(password.encode("utf-8")) > 72:
-        password = hashlib.sha256(password.encode("utf-8")).hexdigest()
     return pwd_context.hash(password)
 
 def verify_password(password: str, hashed_password: str) -> bool:
-    if len(password.encode("utf-8")) > 72:
-        password = hashlib.sha256(password.encode("utf-8")).hexdigest()
     return pwd_context.verify(password, hashed_password)

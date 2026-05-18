@@ -1,17 +1,53 @@
 # app/api/v1/tenants.py
 from fastapi import APIRouter, HTTPException, Depends
 from uuid import uuid4
-from core.db import tenants_collection, tenant_helper, set_password, verify_password
-from models.tenant import Tenant , TenantLogin , TenantSignup
+from core.db import tenants_collection, tenant_helper
+from models.tenant import TenantSignup, TenantLogin
 from pydantic import BaseModel
-import secrets
+import secrets, jwt, os, datetime
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from passlib.context import CryptContext
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 router = APIRouter()
 
+# --- Auth setup ---
+security = HTTPBearer()
+JWT_SECRET = os.getenv("TENANT_JWT_SECRET", "supersecret")   # single secret for tenant tokens
+JWT_ALGO = "HS256"
+
+# --- Password hashing (Argon2) ---
+pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
+
+def set_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verify_password(password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(password, hashed_password)
+
+def get_current_user(token: HTTPAuthorizationCredentials = Depends(security)):
+    try:
+        payload = jwt.decode(token.credentials, JWT_SECRET, algorithms=[JWT_ALGO])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+def require_role(role: str):
+    def role_checker(user=Depends(get_current_user)):
+        if user.get("role") != role:
+            raise HTTPException(status_code=403, detail=f"{role} role required")
+        return user
+    return role_checker
+
+# --- Routes ---
 
 @router.post("/signup", response_model=dict)
 async def signup_tenant(payload: TenantSignup):
-    # Check if tenant already exists
     existing = await tenants_collection.find_one({"email": payload.email})
     if existing:
         raise HTTPException(status_code=400, detail="Tenant with this email already exists")
@@ -21,7 +57,7 @@ async def signup_tenant(payload: TenantSignup):
         "name": payload.name,
         "email": payload.email,
         "hashed_password": set_password(payload.password),
-        "api_key": secrets.token_hex(16)  # issue API key for widget usage
+        "api_key": secrets.token_hex(16)
     }
 
     result = await tenants_collection.insert_one(tenant_dict)
@@ -37,15 +73,49 @@ async def login_tenant(payload: TenantLogin):
     if not verify_password(payload.password, tenant["hashed_password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    # For simplicity, return tenant info + api_key (in production issue JWT for dashboard)
-    return tenant_helper(tenant)
+    token = jwt.encode(
+        {
+            "role": "tenant",
+            "tenant_id": tenant["id"],
+            "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+        },
+        JWT_SECRET,
+        algorithm=JWT_ALGO
+    )
+
+    return {
+        "tenant": tenant_helper(tenant),
+        "access_token": token,
+        "token_type": "Bearer"
+    }
 
 @router.get("/{tenant_id}", response_model=dict)
-async def get_tenant(tenant_id: str):
+async def get_tenant(tenant_id: str, user=Depends(require_role("admin"))):
     tenant = await tenants_collection.find_one({"id": tenant_id})
     if tenant:
         return tenant_helper(tenant)
     raise HTTPException(status_code=404, detail="Tenant not found")
+
+class ResetPasswordInput(BaseModel):
+    tenant_id: str
+    new_password: str
+
+@router.put("/reset_password", response_model=dict)
+async def reset_password(payload: ResetPasswordInput, user=Depends(get_current_user)):
+    if user.get("role") not in ["admin", "tenant"]:
+        raise HTTPException(status_code=403, detail="Not authorized to reset password")
+
+    hashed = set_password(payload.new_password)
+    result = await tenants_collection.update_one(
+        {"id": payload.tenant_id},
+        {"$set": {"hashed_password": hashed}}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    return {"message": "Password updated successfully"}
+
+
 
 
 

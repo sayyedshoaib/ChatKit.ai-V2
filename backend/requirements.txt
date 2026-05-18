@@ -15,3 +15,5 @@ langchain_community
 langchain-core
 google.generativeai
 google-cloud-aiplatform[adk]
+huggingface_hub
+argon2_cffi

@@ -1,32 +1,56 @@
 # app/api/v1/chatbot_config.py
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import jwt, os
+from uuid import uuid4
 from core.db import db
 from models.chatbot_config import ChatbotConfig
-from uuid import uuid4
-
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from PyPDF2 import PdfReader
-import docx  # python-docx
-
-import os
+from pydantic import BaseModel
+from typing import Dict
 from dotenv import load_dotenv
-load_dotenv()
+import datetime
 
-# set api key
+# Load env
+load_dotenv()
 os.environ["GOOGLE_API_KEY"] = os.getenv("GEMINI_API_KEY")
 
 CHATBOT_CONFIG_COLLECTION = os.getenv("CHATBOT_CONFIG_COLLECTION")
-EMBEDDINGS_COLLECTION=os.getenv("EMBEDDINGS_COLLECTION")
-INDEX_NAME=os.getenv("INDEX_NAME")
+EMBEDDINGS_COLLECTION = os.getenv("EMBEDDINGS_COLLECTION")
+INDEX_NAME = os.getenv("INDEX_NAME")
 
 chatbot_collection = db[CHATBOT_CONFIG_COLLECTION]
 embeddings_collection = db[EMBEDDINGS_COLLECTION]
 
 router = APIRouter()
 
+# --- Auth setup ---
+security = HTTPBearer()
+JWT_SECRET = os.getenv("TENANT_JWT_SECRET", "supersecret")
+JWT_ALGO = "HS256"
+
+def get_current_user(token: HTTPAuthorizationCredentials = Depends(security)):
+    try:
+        payload = jwt.decode(token.credentials, JWT_SECRET, algorithms=[JWT_ALGO])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+def require_role(role: str):
+    def role_checker(user=Depends(get_current_user)):
+        if user.get("role") != role:
+            raise HTTPException(status_code=403, detail=f"{role} role required")
+        return user
+    return role_checker
+
+# --- Routes ---
+
 @router.post("/", response_model=dict)
-async def create_or_update_config(config: ChatbotConfig):
+async def create_or_update_config(config: ChatbotConfig, user=Depends(require_role("tenant"))):
+    if user.get("tenant_id") != config.tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant mismatch")
+
     config_dict = {
         "id": str(uuid4()),
         "tenant_id": config.tenant_id,
@@ -35,18 +59,14 @@ async def create_or_update_config(config: ChatbotConfig):
         "workflows": config.workflows,
         "rag_sources": config.rag_sources,
         "db_connection": config.db_connection,
-        "description": config.description,    # mandatory
-        "instruction": config.instruction,    # mandatory
-        "agents": config.agents               # starts empty
+        "description": config.description,
+        "instruction": config.instruction,
+        "agents": config.agents
     }
 
     existing = await chatbot_collection.find_one({"tenant_id": config.tenant_id})
-    print(f"got this: {existing}")
     if existing:
-        await chatbot_collection.update_one(
-            {"tenant_id": config.tenant_id},
-            {"$set": config_dict}
-        )
+        await chatbot_collection.update_one({"tenant_id": config.tenant_id}, {"$set": config_dict})
     else:
         await chatbot_collection.insert_one(config_dict)
 
@@ -55,263 +75,98 @@ async def create_or_update_config(config: ChatbotConfig):
         updated.pop("_id")
     return updated
 
-
-
-
 @router.get("/{tenant_id}", response_model=dict)
-async def get_config(tenant_id: str):
+async def get_config(tenant_id: str, user=Depends(require_role("tenant"))):
+    if user.get("tenant_id") != tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant mismatch")
+
     config = await chatbot_collection.find_one({"tenant_id": tenant_id})
     if config:
-        if "_id" in config:
-            config.pop("_id")   # remove ObjectId
+        config.pop("_id", None)
         return config
     raise HTTPException(status_code=404, detail="Chatbot config not found")
-
-from pydantic import BaseModel
-from typing import List, Dict
 
 class AgentInput(BaseModel):
     tenant_id: str
     agent: dict
 
 @router.post("/add_agent_to_config", response_model=dict)
-async def add_agent_to_config(agent_input: AgentInput):
-    """
-    Add agents to the chatbot configuration for a tenant.
-    """
-    tenant_id = agent_input.tenant_id
-    agent = agent_input.agent
-    # Find tenant config
-    existing = await chatbot_collection.find_one({"tenant_id": tenant_id})
+async def add_agent_to_config(agent_input: AgentInput, user=Depends(require_role("tenant"))):
+    if user.get("tenant_id") != agent_input.tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant mismatch")
+
+    existing = await chatbot_collection.find_one({"tenant_id": agent_input.tenant_id})
     if not existing:
         raise HTTPException(status_code=404, detail="Chatbot config not found")
-    
-    agents = list(existing.get("agents",[]))
-    agents.append(agent)
 
-    # Update agents field (replace or append depending on your use case)
-    await chatbot_collection.update_one(
-        {"tenant_id": tenant_id},
-        {"$set": {"agents": agents}}
-    )
+    agents = list(existing.get("agents", []))
+    agents.append(agent_input.agent)
 
-    # Fetch updated config
-    updated = await chatbot_collection.find_one({"tenant_id": tenant_id})
-    if updated and "_id" in updated:
-        updated.pop("_id")
+    await chatbot_collection.update_one({"tenant_id": agent_input.tenant_id}, {"$set": {"agents": agents}})
+    updated = await chatbot_collection.find_one({"tenant_id": agent_input.tenant_id})
+    updated.pop("_id", None)
     return updated
-
 
 class FAQInput(BaseModel):
     tenant_id: str
-    faq: Dict[str, str]   # single Q&A pair
+    faq: Dict[str, str]
 
 @router.post("/add_faq_to_config", response_model=dict)
-async def add_faq_to_config(faq_input: FAQInput):
-    """
-    Add a FAQ (question-answer pair) to the chatbot configuration for a tenant.
-    """
-    tenant_id = faq_input.tenant_id
-    faq = faq_input.faq
+async def add_faq_to_config(faq_input: FAQInput, user=Depends(require_role("tenant"))):
+    if user.get("tenant_id") != faq_input.tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant mismatch")
 
-    # Find tenant config
-    existing = await chatbot_collection.find_one({"tenant_id": tenant_id})
+    existing = await chatbot_collection.find_one({"tenant_id": faq_input.tenant_id})
     if not existing:
         raise HTTPException(status_code=404, detail="Chatbot config not found")
 
-    # Append new FAQ
     faqs = list(existing.get("faqs", []))
-    faqs.append(faq)
+    faqs.append(faq_input.faq)
 
-    # Update config
-    await chatbot_collection.update_one(
-        {"tenant_id": tenant_id},
-        {"$set": {"faqs": faqs}}
-    )
+    await chatbot_collection.update_one({"tenant_id": faq_input.tenant_id}, {"$set": {"faqs": faqs}})
+    updated = await chatbot_collection.find_one({"tenant_id": faq_input.tenant_id})
+    updated.pop("_id", None)
+    return updated
 
-    # Fetch updated config
-    updated = await chatbot_collection.find_one({"tenant_id": tenant_id})
-    if updated and "_id" in updated:
-        updated.pop("_id")
+class DBUrlInput(BaseModel):
+    tenant_id: str
+    db_url: str
+
+@router.post("/add_db_url_to_config", response_model=dict)
+async def add_db_url_to_config(db_input: DBUrlInput, user=Depends(require_role("tenant"))):
+    if user.get("tenant_id") != db_input.tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant mismatch")
+
+    existing = await chatbot_collection.find_one({"tenant_id": db_input.tenant_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Chatbot config not found")
+
+    await chatbot_collection.update_one({"tenant_id": db_input.tenant_id}, {"$set": {"db_connection": db_input.db_url}})
+    updated = await chatbot_collection.find_one({"tenant_id": db_input.tenant_id})
+    updated.pop("_id", None)
     return updated
 
 
 
-BASE_DIR = "knowledge_base"  # root folder for tenant files
 
-@router.post("/{tenant_id}/upload_rag_source")
-async def upload_rag_source(tenant_id: str, file: UploadFile = File(...)):
-    """
-    Upload a document for RAG agent.
-    Save file under knowledge_base/{tenant_id}/filename.
-    Store metadata in chatbot config.
-    """
-    # Ensure tenant folder exists
-    tenant_folder = os.path.join(BASE_DIR, tenant_id)
-    os.makedirs(tenant_folder, exist_ok=True)
-
-    # Save file to disk
-    file_path = os.path.join(tenant_folder, file.filename)
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
-
-    # Build metadata
-    rag_source = {
-        "source_id": str(uuid4()),
-        "type": file.content_type,
-        "path_or_url": file_path,
-        "metadata": {"size": os.path.getsize(file_path)}
-    }
-
-    # Update tenant config in MongoDB
-    config = await chatbot_collection.find_one({"tenant_id": tenant_id})
-    if not config:
-        raise HTTPException(status_code=404, detail="Chatbot config not found")
-
-    config.setdefault("rag_sources", [])
-    config["rag_sources"].append(rag_source)
-
-    await chatbot_collection.update_one(
-        {"tenant_id": tenant_id},
-        {"$set": {"rag_sources": config["rag_sources"]}}
-    )
-
-    return {"message": "RAG source uploaded", "source": rag_source}
-
-embeddings_model = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001",output_dimensionality=768)
-
-@router.post("/generate_embeddings/{tenant_id}")
-async def generate_embeddings(tenant_id: str):
-    tenant_folder = os.path.join(BASE_DIR, tenant_id)
-    if not os.path.exists(tenant_folder):
-        raise HTTPException(status_code=404, detail="No files found for tenant")
-
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-    inserted_docs = []
-
-    for filename in os.listdir(tenant_folder):
-        file_path = os.path.join(tenant_folder, filename)
-
-        text = ""
-        if filename.endswith(".pdf"):
-            reader = PdfReader(file_path)
-            text = " ".join([page.extract_text() for page in reader.pages if page.extract_text()])
-        elif filename.endswith(".docx"):
-            doc = docx.Document(file_path)
-            text = " ".join([para.text for para in doc.paragraphs if para.text.strip()])
-        else:
-            # fallback for plain text files
-            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                text = f.read()
-
-        if not text.strip():
-            continue  # skip empty files
-
-        # Split into chunks
-        chunks = text_splitter.split_text(text)
-
-        # Generate embeddings for each chunk
-        for i, chunk in enumerate(chunks):
-            vector = embeddings_model.embed_query(chunk)
-
-            doc_record = {
-                "tenant_id": tenant_id,
-                "doc_id": filename,
-                "chunk_id": f"{filename}_{i}",
-                "text": chunk,
-                "embedding": vector
-            }
-
-            embeddings_collection.insert_one(doc_record)
-            inserted_docs.append(doc_record)
-
-    return {"message": "Embeddings generated and stored", "count": len(inserted_docs)}
-
-
-@router.post("/query_embeddings/{tenant_id}")
-async def query_embeddings(tenant_id: str, query: str, k: int = 5, num_candidates: int = 100):
-    """
-    Run a semantic search for a tenant's documents using MongoDB Atlas $vectorSearch.
-    """
-    # Generate embedding for the query
-    query_vector = embeddings_model.embed_query(query)
-
-    # Build pipeline with new $vectorSearch operator
-    pipeline = [
-        {
-            "$vectorSearch": {
-                "index": INDEX_NAME,          # <-- replace with your actual index name
-                "path": "embedding",         # field where vectors are stored
-                "queryVector": query_vector, # array of floats
-                "numCandidates": num_candidates,
-                "limit": k
-            }
-        },
-        {"$match": {"tenant_id": tenant_id}},
-        {"$project": {"text": 1, "doc_id": 1, "chunk_id": 1, "_id": 0}}
-    ]
-
-    # Run aggregation with Motor (async)
-    results = await embeddings_collection.aggregate(pipeline).to_list(length=k)
-    results = results[0]["text"].replace('\n','') if results else ""
-
-    if not results:
-        raise HTTPException(status_code=404, detail="No matching chunks found")
-
-    return {"matches": results}
-
-
-
-
-
-
-
-
-
-
-
-
-# 🔹 Current Code Scope
-# The example ingestion API I gave only handled PDFs and plain text files. That’s because:
-
-# PDFs → PyPDF2 can extract text.
-
-# .txt → simple file read.
-
-# It doesn’t yet handle DOCX, PPTX, Excel, Google Docs/Slides, or images.
-
-# 🔹 Handling Other File Types
-# DOCX (Word) → use python-docx or docx2txt to extract text.
-
-# PPTX (PowerPoint) → use python-pptx to read slide text.
-
-# Excel (XLSX/CSV) → use openpyxl or pandas to read cells/tables.
-
-# Google Docs/Slides → requires Google Drive API integration (OAuth, download as DOCX/PPTX).
-
-# Images (JPEG/PNG) → need OCR (e.g., pytesseract) to extract text.
-
-# Structured data (tables) → you can flatten into text or serialize into JSON before embedding.
-
-# 🔹 Is It Necessary for Initial Development?
-# No — for initial development, it’s best to start with PDFs and plain text.
-# Here’s why:
-
-# They cover the majority of knowledge base use cases (manuals, FAQs, reports).
-
-# Extraction is straightforward.
-
-# Keeps your ingestion pipeline simple and stable.
-
-# You can add support for DOCX/PPTX later once the core pipeline works.
-
-# Images, tables, and structured data are advanced features. They require OCR, schema design, and possibly multimodal embeddings (gemini-embedding-2). That’s not essential for your MVP.
-
-# 🔹 Recommended Approach
-# Phase 1 (MVP) → Support PDFs + .txt files.
-
-# Phase 2 → Add DOCX + PPTX (common in enterprise).
-
-# Phase 3 → Add Excel/CSV for structured data.
-
-# Phase 4 → Add OCR for images, multimodal embeddings if needed.
+# {
+#   "tenant_id": "146feabc-010f-4b81-8eaf-419eeddb7df2",
+#   "welcome_message": "Hello! How can I help you today?",
+#   "faqs": [],
+#   "workflows": {},
+#   "rag_sources": [],
+#   "db_connection": "",
+#   "description": "Tenant chatbot for customer support",
+#   "instruction": "Answer FAQs and escalate complex queries",
+#   "agents": []
+# }
+# {
+#   "email": "tenant2@gmail.com",
+#   "password": "Tenant@123"
+# }
+# {
+#   "name": "Ajio",
+#   "email": "tenant2@gmail.com",
+#   "password": "Tenant@123"
+# }
+# --- Routes ---

@@ -1,7 +1,7 @@
 import os
 
 from fastapi import HTTPException
-from backend.core.db import db
+from core.db import db
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
@@ -12,6 +12,11 @@ from google.adk.agents.llm_agent import LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 
+from langchain_community.utilities.sql_database import SQLDatabase
+from langchain_community.agent_toolkits import create_sql_agent
+from langchain_community.tools.sql_database.tool import QuerySQLCheckerTool
+from google.adk.tools import ToolContext
+from sqlalchemy import create_engine, inspect
 
 
 from dotenv import load_dotenv
@@ -111,6 +116,57 @@ async def run_orchestrator(tenant_id: str, user_query: str):
         )
     
 
+    # DB QUERY AGENT
+    async def generate_sql(context: ToolContext, user_query: str):
+
+        db_url = agent.get_metadata("db_url", "")
+        if not db_url:
+            return {"text": "Database URL not provided in agent metadata."}
+
+        engine = create_engine(db_url, pool_pre_ping=True)
+        db = SQLDatabase(engine)
+
+        agent = create_sql_agent(llm=llm, db=db, verbose=True)
+        sql_query = agent.run(user_query)
+
+        print(f"sql_query : {sql_query}")
+        query_checker = QuerySQLCheckerTool(db=db,llm=llm)
+
+        checked_query = query_checker.invoke({"query":sql_query,"dialect":db.dialect})
+
+        context.state["sql"] = checked_query
+        return {"text": f"Generated SQL: {checked_query}"}
+
+
+    async def execute_sql(context: ToolContext):
+        db_url = agent.get_metadata("db_url", "")
+        if not db_url:
+            return {"text": "Database URL not provided in agent metadata."}
+        
+        sql_query = context.state.get("sql", "")
+        if not sql_query:
+            return {"text": "No SQL query found in state."}
+
+        engine = create_engine(db_url, pool_pre_ping=True)
+
+        # Execute SQL
+        with engine.connect() as conn:
+            result = conn.execute(sql_query)
+            rows = [dict(r) for r in result]
+        context.state["results"] = rows
+
+        return {"text": f"Executed SQL. Rows: {rows}"}
+
+    # DB Query Agent Factory
+    def db_query_agent(user_query: str) -> LlmAgent:
+        return LlmAgent(
+            name="DBQueryAgent",
+            model="gemini-2.5-flash",
+            description=f"Agent that generates SQL from natural language queries, validates and executes them, and returns natural language answers if results are found. Use generate_sql tool to generate and validate SQL queries, and execute_sql tool to run the validated SQL against the database. Always provide a natural language answer based on the results returned from the database. If no results are found, say you cannot find an answer and suggest contacting support. user_query: {user_query}",
+            tools=[generate_sql, execute_sql]
+        )
+
+
 
     agents_info = []
 
@@ -125,6 +181,10 @@ async def run_orchestrator(tenant_id: str, user_query: str):
             faq_response = llm.invoke(faq_desc_prompt)
             sub_agents.append(faq_agent(user_query))
             agents_info.append({"name": agent["name"], "description": faq_response.content if faq_response else "FAQ agent that answers common questions."})
+        elif agent["name"] == "db_query":
+            db_url = agent.get("db_url", "")
+            sub_agents.append(db_query_agent(user_query))
+            agents_info.append({"name": agent["name"], "description": f"DB Query agent that can execute natural language queries on a database with url {db_url}. Extra information about the database: {agent.get('description', '')}"})
 
 
     # 4. Orchestrator agent
@@ -157,8 +217,8 @@ async def run_orchestrator(tenant_id: str, user_query: str):
     return {"text": final_answer}
 
 
-if __name__ == "__main__":
-    result = asyncio.run(run_orchestrator(tenant_id="99fae6f3-80b1-4dba-a332-20195442c842", user_query="Where is my order?"))
-    # result = asyncio.run(run_orchestrator(tenant_id="99fae6f3-80b1-4dba-a332-20195442c842", user_query="total products available?"))
-    # result = asyncio.run(run_orchestrator(tenant_id="99fae6f3-80b1-4dba-a332-20195442c842", user_query="who is elon musk?"))
-    print(result)
+# if __name__ == "__main__":
+#     result = asyncio.run(run_orchestrator(tenant_id="99fae6f3-80b1-4dba-a332-20195442c842", user_query="Where is my order?"))
+#     # result = asyncio.run(run_orchestrator(tenant_id="99fae6f3-80b1-4dba-a332-20195442c842", user_query="total products available?"))
+#     # result = asyncio.run(run_orchestrator(tenant_id="99fae6f3-80b1-4dba-a332-20195442c842", user_query="who is elon musk?"))
+#     print(result)
