@@ -34,6 +34,8 @@ def get_end_user(token: HTTPAuthorizationCredentials = Depends(security)):
         payload = jwt.decode(token.credentials, WIDGET_SECRET, algorithms=[WIDGET_ALGO])
         if payload.get("role") != "end_user":
             raise HTTPException(status_code=403, detail="Only end users can access chat sessions")
+        if not payload.get("tenant_id") or not payload.get("user_id"):
+            raise HTTPException(status_code=400, detail="Invalid token payload")
         return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Widget token expired")
@@ -56,6 +58,7 @@ async def start_chat(req: StartChatRequest, user=Depends(get_end_user)):
     session = {
         "chat_id": chat_id,
         "tenant_id": req.tenant_id,
+        "user_id": user.get("user_id"),   # enforce per-user isolation
         "user_info": req.user_info,
         "messages": []
     }
@@ -73,8 +76,8 @@ async def get_chat(chat_id: str, user=Depends(get_end_user)):
     if not session:
         raise HTTPException(status_code=404, detail="Chat session not found")
 
-    if user.get("tenant_id") != session["tenant_id"]:
-        raise HTTPException(status_code=403, detail="Token tenant mismatch")
+    if user.get("tenant_id") != session["tenant_id"] or user.get("user_id") != session["user_id"]:
+        raise HTTPException(status_code=403, detail="Token mismatch")
 
     session.pop("_id", None)
     return session
@@ -85,8 +88,8 @@ async def send_message(chat_id: str, message: ChatMessage, user=Depends(get_end_
     if not session:
         raise HTTPException(status_code=404, detail="Chat session not found")
 
-    if user.get("tenant_id") != session["tenant_id"]:
-        raise HTTPException(status_code=403, detail="Token tenant mismatch")
+    if user.get("tenant_id") != session["tenant_id"] or user.get("user_id") != session["user_id"]:
+        raise HTTPException(status_code=403, detail="Token mismatch")
 
     try:
         # Run orchestrator workflow for tenant
@@ -95,7 +98,7 @@ async def send_message(chat_id: str, message: ChatMessage, user=Depends(get_end_
         #     user_query=message.text
         # )
         # bot_text = bot_text["text"]
-        bot_text = "dummy rersponse for texting"
+        bot_text = "dummy response for testing"
         print("LLM Response:", bot_text)
     except Exception as e:
         bot_text = f"Sorry, I couldn't process that. Error: {str(e)}"
@@ -113,6 +116,7 @@ async def send_message(chat_id: str, message: ChatMessage, user=Depends(get_end_
     )
 
     return reply
+
 
 
 

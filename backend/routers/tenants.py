@@ -8,6 +8,7 @@ import secrets, jwt, os, datetime
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from passlib.context import CryptContext
 from dotenv import load_dotenv
+import hashlib
 
 # Load environment variables
 load_dotenv()
@@ -44,7 +45,11 @@ def require_role(role: str):
         return user
     return role_checker
 
+def hash_api_key(api_key: str) -> str:
+    return hashlib.sha256(api_key.encode()).hexdigest()
 # --- Routes ---
+
+
 
 @router.post("/signup", response_model=dict)
 async def signup_tenant(payload: TenantSignup):
@@ -52,17 +57,25 @@ async def signup_tenant(payload: TenantSignup):
     if existing:
         raise HTTPException(status_code=400, detail="Tenant with this email already exists")
 
+    # Generate raw API key + hash
+    raw_key = secrets.token_hex(32)  # strong 64-char key
+    hashed_key = hash_api_key(raw_key)
+
     tenant_dict = {
         "id": str(uuid4()),
         "name": payload.name,
         "email": payload.email,
         "hashed_password": set_password(payload.password),
-        "api_key": secrets.token_hex(16)
+        "api_key_hash": hashed_key
     }
 
     result = await tenants_collection.insert_one(tenant_dict)
     created = await tenants_collection.find_one({"_id": result.inserted_id})
-    return tenant_helper(created)
+
+    # Return tenant info + raw API key (only once!)
+    tenant_data = tenant_helper(created)
+    tenant_data["api_key"] = raw_key
+    return tenant_data
 
 @router.post("/login", response_model=dict)
 async def login_tenant(payload: TenantLogin):
@@ -88,6 +101,54 @@ async def login_tenant(payload: TenantLogin):
         "access_token": token,
         "token_type": "Bearer"
     }
+
+@router.post("/regenerate_api_key", response_model=dict)
+async def regenerate_api_key(tenant_id: str,user=Depends(get_current_user)):
+    if user.get("role") not in ["tenant"]:
+        raise HTTPException(status_code=403, detail="Not authorized to reset password")
+    
+    tenant = await tenants_collection.find_one({"id": tenant_id})
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    # Generate new API key
+    raw_key = secrets.token_hex(32)
+    hashed_key = hash_api_key(raw_key)
+
+
+    await tenants_collection.update_one(
+        {"id": tenant_id},
+        {"$set": {"api_key_hash": hashed_key}}
+    )
+
+    return {"new_api_key": raw_key}
+
+WIDGET_SECRET = os.getenv("WIDGET_SECRET", "widgetsecret")  # backend secret for widget tokens
+WIDGET_ALGO = "HS256"
+@router.post("/create_widget_token", response_model=dict)
+async def create_widget_token(tenant_id: str, api_key: str, user_id: str):
+    tenant = await tenants_collection.find_one({"id": tenant_id})
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    # Validate API key (hash comparison)
+    if tenant["api_key_hash"] != hash_api_key(api_key):
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    # Issue short-lived widget JWT
+    token = jwt.encode(
+        {
+            "role": "end_user",
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "exp": datetime.datetime.utcnow() + datetime.timedelta(minutes=30)
+        },
+        WIDGET_SECRET,
+        algorithm=WIDGET_ALGO
+    )
+
+    return {"widget_token": token}
+
 
 @router.get("/{tenant_id}", response_model=dict)
 async def get_tenant(tenant_id: str, user=Depends(require_role("admin"))):
