@@ -11,15 +11,16 @@ app = FastAPI(title="Chatbot SaaS Platform")
 
 # Allow frontend origin (adjust as needed)
 origins = [
-    "http://localhost:5173",  # Vite dev server
+    "http://localhost:3000",  # CRA dev server
+    "http://localhost:5173",  # Vite dev server (if you switch later)
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,          # or ["*"] for all origins
+    allow_origins=origins,          # or ["*"] during dev
     allow_credentials=True,
-    allow_methods=["*"],            # allow POST, GET, OPTIONS, etc.
-    allow_headers=["*"],            # allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Health check endpoint

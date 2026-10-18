@@ -48,6 +48,7 @@ def require_role(role: str):
 
 @router.post("/", response_model=dict)
 async def create_or_update_config(config: ChatbotConfig, user=Depends(require_role("tenant"))):
+    print(f"Received config for {config.tenant_id}: {config}")
     if user.get("tenant_id") != config.tenant_id:
         raise HTTPException(status_code=403, detail="Tenant mismatch")
 
