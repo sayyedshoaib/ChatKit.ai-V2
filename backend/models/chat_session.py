@@ -1,9 +1,12 @@
-from pydantic import BaseModel
+from typing import Any, Dict
+
+from pydantic import BaseModel, Field
+
 
 class ChatMessage(BaseModel):
-    sender: str   # "user" or "bot"
-    text: str
+    text: str = Field(..., min_length=1, max_length=10000)
+
 
 class StartChatRequest(BaseModel):
     tenant_id: str
-    user_info: dict = {}
+    user_info: Dict[str, Any] = Field(default_factory=dict)

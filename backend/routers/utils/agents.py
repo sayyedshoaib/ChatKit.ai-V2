@@ -176,19 +176,19 @@ async def run_orchestrator(tenant_id: str, user_query: str):
         if agent["name"] == "rag":
             sub_agents.append(rag_agent(user_query))
             agents_info.append({"name": agent["name"], "description": agent.get("description", "")})
-        elif agent["name"] == "faq":
-            faq_desc_prompt = f"Generate a short description for an FAQ agent with these Faqs: {faq_database}."
-            faq_response = llm.invoke(faq_desc_prompt)
-            sub_agents.append(faq_agent(user_query))
-            agents_info.append({"name": agent["name"], "description": faq_response.content if faq_response else "FAQ agent that answers common questions."})
         elif agent["name"] == "db_query":
-            db_url = agent.get("db_url", "")
-            sub_agents.append(db_query_agent(user_query))
-            agents_info.append({"name": agent["name"], "description": f"DB Query agent that can execute natural language queries on a database with url {db_url}. Extra information about the database: {agent.get('description', '')}"})
-
+                    db_url = agent.get("db_url", "")
+                    sub_agents.append(db_query_agent(user_query))
+                    agents_info.append({"name": agent["name"], "description": f"DB Query agent that can execute natural language queries on a database with url {db_url}. Extra information about the database: {agent.get('description', '')}"})
+        # elif agent["name"] == "faq":
+        #     faq_desc_prompt = f"Generate a short description for an FAQ agent with these Faqs: {faq_database}."
+        #     faq_response = llm.invoke(faq_desc_prompt)
+        #     sub_agents.append(faq_agent(user_query))
+        #     agents_info.append({"name": agent["name"], "description": faq_response.content if faq_response else "FAQ agent that answers common questions."})
+        
 
     # 4. Orchestrator agent
-    orchestrator_instructions = f"You are an orchestrator/deligator agent. You have these agents with you: {agents_info}. Delegate the task to the suitable agent."
+    orchestrator_instructions = f"You are an orchestrator/deligator agent. You have these agents with you: {agents_info}. Delegate the task to the suitable agent. If you cannot find a suitable agent, say you cannot find an answer and suggest contacting support. You can answer greeting and small talk questions yourself. User query: {user_query}"
     root_agent = LlmAgent(
         name="Coordinator",
         model="gemini-2.5-flash",
@@ -217,8 +217,8 @@ async def run_orchestrator(tenant_id: str, user_query: str):
     return {"text": final_answer}
 
 
-# if __name__ == "__main__":
-#     result = asyncio.run(run_orchestrator(tenant_id="99fae6f3-80b1-4dba-a332-20195442c842", user_query="Where is my order?"))
-#     # result = asyncio.run(run_orchestrator(tenant_id="99fae6f3-80b1-4dba-a332-20195442c842", user_query="total products available?"))
-#     # result = asyncio.run(run_orchestrator(tenant_id="99fae6f3-80b1-4dba-a332-20195442c842", user_query="who is elon musk?"))
-#     print(result)
+if __name__ == "__main__":
+    result = asyncio.run(run_orchestrator(tenant_id="99fae6f3-80b1-4dba-a332-20195442c842", user_query="Where is my order?"))
+    # result = asyncio.run(run_orchestrator(tenant_id="99fae6f3-80b1-4dba-a332-20195442c842", user_query="total products available?"))
+    # result = asyncio.run(run_orchestrator(tenant_id="99fae6f3-80b1-4dba-a332-20195442c842", user_query="who is elon musk?"))
+    print(result)
