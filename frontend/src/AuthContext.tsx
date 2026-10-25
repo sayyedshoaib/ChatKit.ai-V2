@@ -1,27 +1,3 @@
-// import { createContext, useContext, useState, useEffect } from "react";
-
-// const AuthContext = createContext<{ tenantId: string | null }>({ tenantId: null });
-
-// export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
-//   const [tenantId, setTenantId] = useState<string | null>(null);
-
-//   useEffect(() => {
-//     const id = localStorage.getItem("tenant_id");
-//     if (id) setTenantId(id);
-//   }, []);
-
-//   return (
-//     <AuthContext.Provider value={{ tenantId }}>
-//       {children}
-//     </AuthContext.Provider>
-//   );
-// };
-
-// export const useAuth = () => useContext(AuthContext);
-
-
-// 8-10-26
-
 import {
   createContext,
   useContext,
