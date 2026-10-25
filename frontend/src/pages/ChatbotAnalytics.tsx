@@ -1,7 +1,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../services/api_service";
-import Navbar from "../components/Navbar";
+// import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 
 type Overview = {
@@ -145,18 +145,18 @@ function formatDuration(value?: number | null): string {
   return `${Math.round(value)} ms`;
 }
 
-function formatDate(value?: string): string {
-  if (!value) return "—";
+// function formatDate(value?: string): string {
+//   if (!value) return "—";
 
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
+//   const date = new Date(value);
+//   if (Number.isNaN(date.getTime())) return value;
 
-  return date.toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
-}
+//   return date.toLocaleDateString("en-IN", {
+//     day: "2-digit",
+//     month: "short",
+//     year: "numeric",
+//   });
+// }
 
 function formatDateTime(value?: string): string {
   if (!value) return "—";
