@@ -13,7 +13,7 @@
   const tenantId = script.dataset.tenantId;
   const widgetKey = script.dataset.widgetKey;
   const apiBase = (
-    script.dataset.apiBase || "http://localhost:8000"
+    script.dataset.apiBase || "https://chatkit-ai-v2.onrender.com"
   ).replace(/\/+$/, "");
 
   if (!tenantId || !widgetKey) {

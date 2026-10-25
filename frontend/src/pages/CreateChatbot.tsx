@@ -31,10 +31,8 @@ type ConfiguredAgent = Agent & {
   db_url?: string;
 };
 
-// const API_BASE_URL =
-//   import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-
-const API_BASE_URL ="http://localhost:8000";
+const API_BASE_URL =
+  process.env.REACT_APP_API_BASE_URL || "http://localhost:8000";
 
 const WIDGET_SCRIPT_URL = `${window.location.origin}/chatkit-widget.js`;
 
