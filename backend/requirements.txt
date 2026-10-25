@@ -16,3 +16,4 @@ google.generativeai
 google-cloud-aiplatform[adk]
 huggingface_hub
 argon2_cffi
+PyJWT
